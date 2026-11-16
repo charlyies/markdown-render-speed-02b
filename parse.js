@@ -1590,13 +1590,14 @@ function processEmphasis(nodes) {
         node.closes.push(tag);
         node.len -= use;
         if (opener.len === 0) stack.splice(openerIdx, 1);
-        // marked rule (doc-07/11/26): a `**` closer that can also open
-        // (followed by a letter) forming a strong with a `**` opener
-        // that cannot close (preceded by whitespace) invalidates an
-        // enclosing single `*` opener, so `*a **b**c*` stays literal
-        // outside the strong. (cm-410: closer cannot open; cm-411:
-        // opener can close — both still form the outer em.)
-        if (use === 2 && node.o && !opener.c) {
+        // marked rule (doc-07/11/26): a standalone `**` closer that can
+        // also open (followed by a letter) forming a strong with a `**`
+        // opener that cannot close (preceded by whitespace) invalidates
+        // an enclosing single `*` opener, so `*a **b**c*` stays literal
+        // outside the strong. Only when the closer is fully consumed
+        // (a `***` run's leftover still forms the outer em, doc-19).
+        // (cm-410: closer cannot open; cm-411: opener can close.)
+        if (use === 2 && node.len === 0 && node.o && !opener.c) {
           for (let si = stack.length - 1; si >= 0; si--) {
             const e2 = stack[si];
             if (e2.node.ch === node.ch && e2.node.len === 1 && e2.idx < openerNodeIdx) {
