@@ -1590,6 +1590,21 @@ function processEmphasis(nodes) {
         node.closes.push(tag);
         node.len -= use;
         if (opener.len === 0) stack.splice(openerIdx, 1);
+        // marked rule (doc-07/11/26): a `**` closer that can also open
+        // (followed by a letter) forming a strong with a `**` opener
+        // that cannot close (preceded by whitespace) invalidates an
+        // enclosing single `*` opener, so `*a **b**c*` stays literal
+        // outside the strong. (cm-410: closer cannot open; cm-411:
+        // opener can close — both still form the outer em.)
+        if (use === 2 && node.o && !opener.c) {
+          for (let si = stack.length - 1; si >= 0; si--) {
+            const e2 = stack[si];
+            if (e2.node.ch === node.ch && e2.node.len === 1 && e2.idx < openerNodeIdx) {
+              stack.splice(si, 1);
+              break;
+            }
+          }
+        }
         // unmatched openers strictly between the opener and this closer
         // now sit inside the emphasis just formed: they can no longer
         // match anything outside it (that would cross the boundary)
