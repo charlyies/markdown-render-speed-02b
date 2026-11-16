@@ -1129,7 +1129,10 @@ function blockParse(lines, refs) {
         lastMatched = k;
       } else break;
     }
-    const bb = sawBlank && blankDepth <= lastMatched;
+    // a blank line at depth D separates blocks at depth D and at depth
+    // D-1 (a new list item is a child of the list, one level below the
+    // blank's container), so compare against lastMatched + 1
+    const bb = sawBlank && blankDepth <= lastMatched + 1;
     sawBlank = false;
     // a line that is only container markers + whitespace is a blank line
     // (rest(c) empty); whitespace after a marker is paragraph content
@@ -1159,7 +1162,13 @@ function blockParse(lines, refs) {
     if (tip.t === 'code' && tip.fenced) {
       // A fenced block's content lines need not match a list item's
       // indent, but a missing `>` does end a block inside a quote.
-      if (!allMatched && failIdx >= 0 && stack[failIdx].t === 'quote') {
+      // The failure may be reported at an earlier container (the item)
+      // before the quote is even checked, so test whether the quote
+      // itself matched: if lastMatched is before the quote's index,
+      // the line is outside the quote and the fence ends.
+      let quoteIdx = -1;
+      for (let k = 1; k < stack.length - 1; k++) if (stack[k].t === 'quote') quoteIdx = k;
+      if (!allMatched && quoteIdx >= 0 && lastMatched < quoteIdx) {
         closeTo(lastMatched);
       } else {
         if (allMatched && isClosingFence(c, tip)) { closeTo(lastMatched); continue; }
@@ -1350,7 +1359,11 @@ function tryExtUrl(s, i, n) {
   const domEnd = parseWwwDomain(s, i + prefixLen, end);
   if (domEnd < 0) return null;
   const text = s.slice(i, end);
-  return { end: end, text: text, href: hrefPrefix + text };
+  // the href is percent-encoded (e.g. a trailing backslash becomes %5C,
+  // doc-37) while the link text stays raw
+  const href = cleanUrl(hrefPrefix + text);
+  if (href === null) return null;
+  return { end: end, text: text, href: href };
 }
 
 // Try to match an email address whose @ is at position `at` in s, with
@@ -1974,7 +1987,13 @@ export function parse(markdown) {
   (function setTrail(b) {
     if (b.t === 'html') {
       const isLast = b.lastLine === lines.length - 1;
-      const nextBlank = !isLast && isBlankStr(lines[b.lastLine + 1]);
+      // a tab-only next line is NOT blank for this rule (doc-15): only
+      // an empty or spaces-only line suppresses the trailing newline
+      let nextBlank = false;
+      if (!isLast) {
+        const nl = lines[b.lastLine + 1];
+        nextBlank = nl.length === 0 || /^[ ]+$/.test(nl);
+      }
       b.trailNl = b.cond <= 5 ? (isLast ? endsWithNl : !nextBlank) : (isLast && endsWithNl);
     }
     if (b.ch) for (let i = 0; i < b.ch.length; i++) setTrail(b.ch[i]);
