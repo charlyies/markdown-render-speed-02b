@@ -987,14 +987,23 @@ function blockParse(lines, refs) {
         if (tip.t === 'para') {
           let text = rest(c);
           if (!allMatched) {
-            // lazy continuation: a setext underline is indented by 4 so it
-            // stays text; other lines lose up to 4 leading spaces
-            if (setextLevel(text) > 0) text = '    ' + text;
-            else {
-              let strip = 0;
-              while (strip < text.length && strip < 4 &&
-                     (text.charCodeAt(strip) === 32 || text.charCodeAt(strip) === 9)) strip++;
-              if (strip > 0) text = text.slice(strip);
+            // lazy continuation: strip up to 4 leading spaces only when
+            // no quote/item container matched at all (fully lazy, e.g.
+            // cm-238 `> foo` + ` - bar`, cm-291 list para). When a quote
+            // or item did match, the remaining spaces are paragraph
+            // content (doc-38 `>  Renderer`, doc-25 tab continuation).
+            let realMatched = false;
+            for (let k = 1; k <= contIdx; k++) {
+              if (stack[k].t === 'quote' || stack[k].t === 'item') { realMatched = true; break; }
+            }
+            if (!realMatched) {
+              if (setextLevel(text) > 0) text = '    ' + text;
+              else {
+                let strip = 0;
+                while (strip < text.length && strip < 4 &&
+                       (text.charCodeAt(strip) === 32 || text.charCodeAt(strip) === 9)) strip++;
+                if (strip > 0) text = text.slice(strip);
+              }
             }
           }
           tip.lines.push(text);
