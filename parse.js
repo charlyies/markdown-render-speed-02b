@@ -1225,6 +1225,8 @@ function parseWwwDomain(s, i, n) {
 }
 
 // Trim the end of an extended autolink per the GFM path-validation rules.
+// Loops because stripping a `)` can expose trailing punctuation (and
+// vice versa).
 function trimAutolinkEnd(s, start, end) {
   // a trailing `;` that ends an entity (`&name;`) removes the whole entity
   if (end > start && s.charCodeAt(end - 1) === 59) {
@@ -1232,20 +1234,24 @@ function trimAutolinkEnd(s, start, end) {
     while (k >= start && isAlnumCode(s.charCodeAt(k))) k--;
     if (k >= start && s.charCodeAt(k) === 38 && k < end - 1) end = k;
   }
-  while (end > start) {
-    const c = s.charCodeAt(end - 1);
-    if (c === 63 || c === 33 || c === 46 || c === 44 || c === 58 || c === 59 || c === 42 || c === 95 || c === 126) end--;
-    else break;
-  }
-  if (end > start && s.charCodeAt(end - 1) === 41) {
-    let open = 0, close = 0;
-    for (let k = start; k < end; k++) {
-      const c = s.charCodeAt(k);
-      if (c === 40) open++;
-      else if (c === 41) close++;
+  for (;;) {
+    const before = end;
+    while (end > start) {
+      const c = s.charCodeAt(end - 1);
+      if (c === 63 || c === 33 || c === 46 || c === 44 || c === 58 || c === 59 || c === 42 || c === 95 || c === 126) end--;
+      else break;
     }
-    let strip = close - open;
-    while (strip > 0 && end > start && s.charCodeAt(end - 1) === 41) { end--; strip--; }
+    if (end > start && s.charCodeAt(end - 1) === 41) {
+      let open = 0, close = 0;
+      for (let k = start; k < end; k++) {
+        const c = s.charCodeAt(k);
+        if (c === 40) open++;
+        else if (c === 41) close++;
+      }
+      let strip = close - open;
+      while (strip > 0 && end > start && s.charCodeAt(end - 1) === 41) { end--; strip--; }
+    }
+    if (end === before) break;
   }
   return end;
 }
@@ -1434,22 +1440,23 @@ function altText(nodes) {
 
 // Process emphasis / strikethrough delimiters in one node array, in place.
 function processEmphasis(nodes) {
-  const stack = [];
+  const stack = []; // entries: {node, idx}
   for (let ni = 0; ni < nodes.length; ni++) {
     const node = nodes[ni];
     if (node.t !== 3) continue;
     if (node.c) {
       // look for a matching opener
       while (node.len > 0) {
-        let opener = null, openerIdx = -1;
+        let opener = null, openerIdx = -1, openerNodeIdx = -1;
         for (let si = stack.length - 1; si >= 0; si--) {
-          const o = stack[si];
+          const e = stack[si];
+          const o = e.node;
           if (o.ch !== node.ch || !o.o) continue;
           // odd-match rule: blocked when the sum is a multiple of 3,
           // unless both lengths are multiples of 3
           if ((o.c || node.o) && (o.len + node.len) % 3 === 0 &&
               !(o.len % 3 === 0 && node.len % 3 === 0)) continue;
-          opener = o; openerIdx = si; break;
+          opener = o; openerIdx = si; openerNodeIdx = e.idx; break;
         }
         if (!opener) break;
         const use = (opener.len >= 2 && node.len >= 2) ? 2 : 1;
@@ -1459,9 +1466,15 @@ function processEmphasis(nodes) {
         node.closes.push(tag);
         node.len -= use;
         if (opener.len === 0) stack.splice(openerIdx, 1);
+        // unmatched openers strictly between the opener and this closer
+        // now sit inside the emphasis just formed: they can no longer
+        // match anything outside it (that would cross the boundary)
+        for (let si = stack.length - 1; si >= 0; si--) {
+          if (stack[si].idx > openerNodeIdx) stack.splice(si, 1);
+        }
       }
     }
-    if (node.len > 0 && node.o) stack.push(node);
+    if (node.len > 0 && node.o) stack.push({ node: node, idx: ni });
   }
   return nodes;
 }
@@ -1702,7 +1715,8 @@ function scanInline(s, refs) {
       continue;
     }
     if (ch === 119 || ch === 104 || ch === 87 || ch === 72) { // w / h / W / H : www. / http(s)://
-      const au = tryExtUrl(s, i, n);
+      // extended autolinks do not form inside a link's text
+      const au = brackets.length === 0 ? tryExtUrl(s, i, n) : null;
       if (au) {
         flush();
         nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }], auto: true });
@@ -1724,7 +1738,8 @@ function scanInline(s, refs) {
       continue;
     }
     if (ch === 64) { // @ : email autolink
-      const em = tryExtEmail(s, i, n, text);
+      // extended autolinks do not form inside a link's text
+      const em = brackets.length === 0 ? tryExtEmail(s, i, n, text) : null;
       if (em) {
         text = text.slice(0, text.length - em.localLen);
         flush();
