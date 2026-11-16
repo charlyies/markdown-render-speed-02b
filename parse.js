@@ -1170,6 +1170,11 @@ function blockParse(lines, refs) {
       for (let k = 1; k < stack.length - 1; k++) if (stack[k].t === 'quote') quoteIdx = k;
       if (!allMatched && quoteIdx >= 0 && lastMatched < quoteIdx) {
         closeTo(lastMatched);
+      } else if (!allMatched && tip.lines.length === 0) {
+        // an empty fenced block ends when its first content line is
+        // outside its container (doc-17); once it has content, later
+        // lines are code regardless of indent (doc-02)
+        closeTo(lastMatched);
       } else {
         if (allMatched && isClosingFence(c, tip)) { closeTo(lastMatched); continue; }
         if (allMatched) adv(c, Math.min(indentCols(c), tip.fenceIndent));
@@ -1514,6 +1519,14 @@ function tryLink(s, j, n, br, nodes, brackets, refs) {
     }
   }
   const children = nodes.splice(br.nodeIdx + 1);
+  // an extended autolink (www/http/email) inside a link's text is
+  // unformed when the outer link forms (doc-01): it renders as plain
+  // text. An explicit `<...>` autolink (no `ext`) stays a link.
+  for (let k2 = 0; k2 < children.length; k2++) {
+    if (children[k2].t === 6 && children[k2].ext) {
+      children[k2] = { t: 0, s: children[k2].ch[0].s };
+    }
+  }
   while (brackets.length && brackets[brackets.length - 1].nodeIdx >= br.nodeIdx) brackets.pop();
   if (br.img) nodes[br.nodeIdx] = { t: 7, src: clean, title: title, ch: children };
   else nodes[br.nodeIdx] = { t: 6, href: clean, title: title, ch: children };
@@ -1823,11 +1836,13 @@ function scanInline(s, refs) {
       continue;
     }
     if (ch === 119 || ch === 104 || ch === 87 || ch === 72) { // w / h / W / H : www. / http(s)://
-      // extended autolinks do not form inside a link's text
-      const au = brackets.length === 0 ? tryExtUrl(s, i, n) : null;
+      // extended autolinks DO form inside brackets (doc-39): if the
+      // outer bracket later forms a link, the autolink is allowed
+      // inside link text; if it does not form, the autolink stands
+      const au = tryExtUrl(s, i, n);
       if (au) {
         flush();
-        nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }], auto: true });
+        nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }], auto: true, ext: true });
         i = au.end;
         continue;
       }
@@ -1846,12 +1861,12 @@ function scanInline(s, refs) {
       continue;
     }
     if (ch === 64) { // @ : email autolink
-      // extended autolinks do not form inside a link's text
-      const em = brackets.length === 0 ? tryExtEmail(s, i, n, text, nodes) : null;
+      // extended autolinks DO form inside brackets (doc-39), same as URLs
+      const em = tryExtEmail(s, i, n, text, nodes);
       if (em) {
         text = text.slice(0, text.length - em.localLen);
         flush();
-        nodes.push({ t: 6, href: em.href, title: null, ch: [{ t: 0, s: em.text }], auto: true });
+        nodes.push({ t: 6, href: em.href, title: null, ch: [{ t: 0, s: em.text }], auto: true, ext: true });
         i = em.end;
         continue;
       }
