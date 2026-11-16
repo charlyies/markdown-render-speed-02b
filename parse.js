@@ -1339,7 +1339,7 @@ function autolinkPrevOkEmail(s, i) {
 
 // Try to match an extended www. / http(s):// autolink at i. Returns the
 // end index and href, or null.
-function tryExtUrl(s, i, n) {
+function tryExtUrl(s, i, n, inBrackets) {
   let prefixLen = 0;
   let hrefPrefix = '';
   if (s.startsWith('www.', i)) { prefixLen = 4; hrefPrefix = 'http://'; }
@@ -1352,11 +1352,14 @@ function tryExtUrl(s, i, n) {
   if (!autolinkPrevOk(s, i)) return null;
   // find the raw end (up to space/tab/newline/<), trim it, then validate
   // the domain within the trimmed span (trailing emphasis `_` etc. must
-  // not poison domain validation)
+  // not poison domain validation). Inside brackets, a `]` ends the URL
+  // (it closes the bracket); otherwise the `](dest)` would be swallowed
+  // into the autolink and the outer link could never form (doc-34/12).
   let j = i + prefixLen;
   while (j < n) {
     const c = s.charCodeAt(j);
     if (c === 32 || c === 9 || c === 10 || c === 60) break;
+    if (inBrackets && c === 93) break;
     j++;
   }
   const end = trimAutolinkEnd(s, i, j);
@@ -1839,7 +1842,7 @@ function scanInline(s, refs) {
       // extended autolinks DO form inside brackets (doc-39): if the
       // outer bracket later forms a link, the autolink is allowed
       // inside link text; if it does not form, the autolink stands
-      const au = tryExtUrl(s, i, n);
+      const au = tryExtUrl(s, i, n, brackets.length > 0);
       if (au) {
         flush();
         nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }], auto: true, ext: true });
