@@ -1061,6 +1061,12 @@ function blockParse(lines, refs) {
       const tipIdx = stack.length - 1;
       const tip = stack[tipIdx];
       const leafOpen = isLeaf(tip) && lastMatched >= tipIdx - 1;
+      // a whitespace-only line that contains a tab is a table row
+      // (empty cells), not a blank line ending the table (doc-02)
+      if (leafOpen && tip.t === 'table' && line.indexOf('\t') >= 0) {
+        tip.rows.push(splitCells(rest(c)));
+        continue;
+      }
       if (leafOpen && tip.t === 'code') {
         if (tip.fenced) tip.lines.push(codeLine(c));
         else {
