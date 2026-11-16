@@ -1222,8 +1222,15 @@ function parseEmailDomain(s, i, n) {
     break;
   }
   if (dots < 1) return -1;
-  const last = s.charCodeAt(j - 1);
-  if (last === 45 || last === 95) return -1;
+  // a domain may not end in `-` or `_`: back up over a trailing one.
+  // The caller decides whether that char is part of the email (invalid,
+  // gfm-632) or a separate emphasis delimiter (valid, doc-31).
+  while (j > i + 1) {
+    const last = s.charCodeAt(j - 1);
+    if (last === 45 || last === 95) j--;
+    else break;
+  }
+  if (j <= i) return -1;
   return j;
 }
 
@@ -1340,7 +1347,7 @@ function tryExtUrl(s, i, n) {
 // Try to match an email address whose @ is at position `at` in s, with
 // the local part ending at `at` in the accumulated text `text`.
 // Returns {end, text, href} or null.
-function tryExtEmail(s, at, n, text) {
+function tryExtEmail(s, at, n, text, nodes) {
   // scan the local part backwards in the raw source: a backslash escape
   // breaks it, and the char before it must be start/ws/delimiter (not <)
   let ls = at;
@@ -1354,6 +1361,32 @@ function tryExtEmail(s, at, n, text) {
   if (!autolinkPrevOkEmail(s, ls)) return null;
   const domEnd = parseEmailDomain(s, at + 1, n);
   if (domEnd < 0) return null;
+  // a `_`/`-` right after the domain is part of the email (invalid,
+  // gfm-632) unless it is an emphasis delimiter closing an open `_`
+  // (doc-31): then it belongs to the emphasis, not the email
+  if (domEnd < n) {
+    const tc = s.charCodeAt(domEnd);
+    if (tc === 95 || tc === 45) {
+      let isDelim = false;
+      if (tc === 95 && nodes) {
+        // the `_` can close if right-flanking, and an opener exists
+        const after = domEnd + 1 < n ? s.charCodeAt(domEnd + 1) : -1;
+        const before = s.charCodeAt(domEnd - 1);
+        const afterWs = after === -1 || after === 32 || after === 9 || after === 10;
+        const afterPunct = after !== -1 && isPunctCode(after);
+        const beforeWs = before === 32 || before === 9 || before === 10;
+        const beforePunct = isPunctCode(before);
+        const rightFlank = !beforeWs && (!beforePunct || afterWs || afterPunct);
+        if (rightFlank) {
+          for (let q = 0; q < nodes.length; q++) {
+            const nd = nodes[q];
+            if (nd.t === 3 && nd.ch === '_' && nd.o && nd.len > 0) { isDelim = true; break; }
+          }
+        }
+      }
+      if (!isDelim) return null;
+    }
+  }
   const local = s.slice(ls, at);
   const email = local + s.slice(at, domEnd);
   return { end: domEnd, localLen: at - ls, text: email, href: 'mailto:' + email };
@@ -1380,6 +1413,12 @@ function tryProtocol(s, i, n) {
   if (k === j || k >= n || s.charCodeAt(k) !== 64) return null;
   const domEnd = parseEmailDomain(s, k + 1, n);
   if (domEnd < 0) return null;
+  // a `_`/`-` right after the domain invalidates the email (gfm-633);
+  // parseEmailDomain already backed up over it, so it sits at domEnd
+  if (domEnd < n) {
+    const tc = s.charCodeAt(domEnd);
+    if (tc === 95 || tc === 45) return null;
+  }
   let end = domEnd;
   if (isXmpp && end < n && s.charCodeAt(end) === 47) {
     // optional /resource of [A-Za-z0-9@.]+
@@ -1786,7 +1825,7 @@ function scanInline(s, refs) {
     }
     if (ch === 64) { // @ : email autolink
       // extended autolinks do not form inside a link's text
-      const em = brackets.length === 0 ? tryExtEmail(s, i, n, text) : null;
+      const em = brackets.length === 0 ? tryExtEmail(s, i, n, text, nodes) : null;
       if (em) {
         text = text.slice(0, text.length - em.localLen);
         flush();
