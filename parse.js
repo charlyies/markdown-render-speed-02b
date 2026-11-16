@@ -1553,6 +1553,21 @@ function altText(nodes) {
 // Process emphasis / strikethrough delimiters in one node array, in place.
 function processEmphasis(nodes) {
   const stack = []; // entries: {node, idx}
+  // precompute, per delimiter char, the next index >= i holding a
+  // len>=2 closer (for the single-closer-must-not-split-a-double-opener
+  // rule); avoids an O(n) forward scan per closer
+  const nextMulti = {};
+  for (const ch of ['*', '_', '~']) {
+    const arr = new Array(nodes.length + 1).fill(-1);
+    let nxt = -1;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const nd = nodes[i];
+      if (nd.t === 3 && nd.ch === ch && nd.len >= 2 && nd.c) nxt = i;
+      arr[i] = nxt;
+    }
+    arr[nodes.length] = -1;
+    nextMulti[ch] = arr;
+  }
   for (let ni = 0; ni < nodes.length; ni++) {
     const node = nodes[ni];
     if (node.t !== 3) continue;
@@ -1573,12 +1588,7 @@ function processEmphasis(nodes) {
           // keeps the `**` strong and leaves the middle `*` literal.
           // (A triple opener is fine: using 1 leaves 2 for the strong.)
           if (node.len === 1 && o.len === 2) {
-            let laterStrong = false;
-            for (let nj = ni + 1; nj < nodes.length; nj++) {
-              const nd = nodes[nj];
-              if (nd.t === 3 && nd.ch === node.ch && nd.len >= 2 && nd.c) { laterStrong = true; break; }
-            }
-            if (laterStrong) continue;
+            if (nextMulti[node.ch][ni + 1] >= 0) continue;
           }
           opener = o; openerIdx = si; openerNodeIdx = e.idx; break;
         }
