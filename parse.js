@@ -676,6 +676,9 @@ function computeTight(list) {
     const item = list.ch[i];
     // a blank line before an item (other than the first) makes it loose
     if (i > 0 && item.blankBefore) tight = false;
+    // a block removed as a definition-only paragraph still counts:
+    // a blank line before it separated two blocks inside this item
+    if (item.loose) tight = false;
     // a blank line between two blocks inside an item makes it loose
     for (let k = 1; k < item.ch.length; k++) {
       if (item.ch[k].blankBefore) { tight = false; break; }
@@ -689,6 +692,10 @@ function blockParse(lines, refs) {
   const doc = { t: 'doc', ch: [] };
   const stack = [doc];
   let sawBlank = false;
+  // deepest container index a blank line was inside: a true blank line
+  // counts at every level (depth 0); a marker-only line (e.g. `>`) only
+  // counts inside the container it was matched in
+  let blankDepth = -1;
 
   function isLeaf(b) {
     return b.t === 'para' || b.t === 'head' || b.t === 'code' || b.t === 'html' || b.t === 'table' || b.t === 'hr';
@@ -701,11 +708,18 @@ function blockParse(lines, refs) {
       if (b.t === 'para') {
         b.lines = parseDefs(b.lines, refs);
         if (b.lines.length === 0 || b.lines.join('').trim() === '') {
+          // a definition-only paragraph still separated the blocks
+          // around it: a blank line before it loosens its item
+          if (b.blankBefore && parent.t === 'item') parent.loose = true;
           parent.ch.length--;
           continue;
         }
       } else if (b.t === 'code' && !b.fenced) {
         while (b.lines.length && b.lines[b.lines.length - 1] === '') b.lines.pop();
+      } else if (b.t === 'code' && b.fenced) {
+        // a fenced block drops one trailing completely-empty line
+        // (a line of spaces is kept, cm-129; an empty line is not, cm-318)
+        if (b.lines.length && b.lines[b.lines.length - 1] === '') b.lines.pop();
       } else if (b.t === 'list') {
         computeTight(b);
       }
@@ -1049,6 +1063,7 @@ function blockParse(lines, refs) {
       }
       closeTo(lastMatched);
       sawBlank = true;
+      blankDepth = 0;
       continue;
     }
     // match containers
@@ -1073,6 +1088,9 @@ function blockParse(lines, refs) {
         }
         if (!ok) { allMatched = false; failIdx = k; break; }
       } else if (b.t === 'item') {
+        // an empty item cannot be continued after a blank line:
+        // the next indented line is a new block outside the list
+        if (sawBlank && b.ch.length === 0) { allMatched = false; failIdx = k; break; }
         // a blank remainder is always inside an item
         if (isBlankFrom(c) || indentCols(c) >= b.indent) {
           adv(c, Math.min(indentCols(c), b.indent));
@@ -1082,7 +1100,7 @@ function blockParse(lines, refs) {
         lastMatched = k;
       } else break;
     }
-    const bb = sawBlank;
+    const bb = sawBlank && blankDepth <= lastMatched;
     sawBlank = false;
     // a line that is only container markers + whitespace is a blank line
     // (rest(c) empty); whitespace after a marker is paragraph content
@@ -1105,6 +1123,7 @@ function blockParse(lines, refs) {
       }
       closeTo(lastMatched);
       sawBlank = true;
+      blankDepth = lastMatched;
       continue;
     }
     const tip = stack[stack.length - 1];
