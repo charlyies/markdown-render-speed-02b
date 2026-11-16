@@ -312,6 +312,29 @@ function adv(c, n) {
 function rest(c) {
   return (c.tab > 0 ? ' '.repeat(c.tab) : '') + c.s.slice(c.i);
 }
+
+// Code-block content line: like rest(), but leading tabs are expanded to
+// spaces (tab stops of 4) from the cursor's column; internal tabs pass
+// through literally. A tab that is the very first character at column 0
+// is content, not indentation, and stays a literal tab.
+function codeLine(c) {
+  if (c.tab === 0 && c.col === 0 && c.i < c.len && c.s.charCodeAt(c.i) === 9) return rest(c);
+  let out = '';
+  let col = c.col;
+  if (c.tab > 0) { out += ' '.repeat(c.tab); col += c.tab; }
+  let i = c.i;
+  const s = c.s, n = c.len;
+  while (i < n) {
+    const ch = s.charCodeAt(i);
+    if (ch === 32) { out += ' '; col++; i++; }
+    else if (ch === 9) {
+      const w = 4 - (col & 3);
+      out += ' '.repeat(w); col += w; i++;
+    } else break;
+  }
+  out += s.slice(i);
+  return out;
+}
 function indentCols(c) {
   let i = c.i, col = c.col, tab = c.tab, n = 0;
   while (tab > 0) { n++; tab--; col++; }
@@ -1011,10 +1034,10 @@ function blockParse(lines, refs) {
       const tip = stack[tipIdx];
       const leafOpen = isLeaf(tip) && lastMatched >= tipIdx - 1;
       if (leafOpen && tip.t === 'code') {
-        if (tip.fenced) tip.lines.push(rest(c));
+        if (tip.fenced) tip.lines.push(codeLine(c));
         else {
           const ind = indentCols(c);
-          if (ind >= 4) { adv(c, 4); tip.lines.push(rest(c)); }
+          if (ind >= 4) { adv(c, 4); tip.lines.push(codeLine(c)); }
           else tip.lines.push('');
         }
         continue;
@@ -1067,10 +1090,10 @@ function blockParse(lines, refs) {
       const tipB = stack[stack.length - 1];
       const leafOpenB = isLeaf(tipB) && lastMatched >= stack.length - 2;
       if (leafOpenB && tipB.t === 'code') {
-        if (tipB.fenced) tipB.lines.push(rest(c));
+        if (tipB.fenced) tipB.lines.push(codeLine(c));
         else {
           const indB = indentCols(c);
-          if (indB >= 4) { adv(c, 4); tipB.lines.push(rest(c)); }
+          if (indB >= 4) { adv(c, 4); tipB.lines.push(codeLine(c)); }
           else tipB.lines.push('');
         }
         continue;
@@ -1093,13 +1116,13 @@ function blockParse(lines, refs) {
       } else {
         if (allMatched && isClosingFence(c, tip)) { closeTo(lastMatched); continue; }
         if (allMatched) adv(c, Math.min(indentCols(c), tip.fenceIndent));
-        tip.lines.push(rest(c));
+        tip.lines.push(codeLine(c));
         continue;
       }
     } else if (tip.t === 'code') {
       if (allMatched && indentCols(c) >= 4) {
         adv(c, 4);
-        tip.lines.push(rest(c));
+        tip.lines.push(codeLine(c));
         continue;
       }
       closeTo(lastMatched);
@@ -1203,9 +1226,15 @@ function parseWwwDomain(s, i, n) {
 
 // Trim the end of an extended autolink per the GFM path-validation rules.
 function trimAutolinkEnd(s, start, end) {
+  // a trailing `;` that ends an entity (`&name;`) removes the whole entity
+  if (end > start && s.charCodeAt(end - 1) === 59) {
+    let k = end - 2;
+    while (k >= start && isAlnumCode(s.charCodeAt(k))) k--;
+    if (k >= start && s.charCodeAt(k) === 38 && k < end - 1) end = k;
+  }
   while (end > start) {
     const c = s.charCodeAt(end - 1);
-    if (c === 63 || c === 33 || c === 46 || c === 44 || c === 58 || c === 42 || c === 95 || c === 126) end--;
+    if (c === 63 || c === 33 || c === 46 || c === 44 || c === 58 || c === 59 || c === 42 || c === 95 || c === 126) end--;
     else break;
   }
   if (end > start && s.charCodeAt(end - 1) === 41) {
@@ -1217,11 +1246,6 @@ function trimAutolinkEnd(s, start, end) {
     }
     let strip = close - open;
     while (strip > 0 && end > start && s.charCodeAt(end - 1) === 41) { end--; strip--; }
-  }
-  if (end > start && s.charCodeAt(end - 1) === 59) {
-    let k = end - 2;
-    while (k >= start && isAlnumCode(s.charCodeAt(k))) k--;
-    if (k >= start && s.charCodeAt(k) === 38 && k < end - 1) end = k;
   }
   return end;
 }
@@ -1243,8 +1267,7 @@ function autolinkPrevOkEmail(s, i) {
 function tryExtUrl(s, i, n) {
   let prefixLen = 0;
   let hrefPrefix = '';
-  const low4 = s.slice(i, i + 4).toLowerCase();
-  if (low4 === 'www.') { prefixLen = 4; hrefPrefix = 'http://'; }
+  if (s.startsWith('www.', i)) { prefixLen = 4; hrefPrefix = 'http://'; }
   else {
     const low = s.slice(i, i + 8).toLowerCase();
     if (low.startsWith('http://')) prefixLen = 7;
@@ -1252,16 +1275,19 @@ function tryExtUrl(s, i, n) {
     else return null;
   }
   if (!autolinkPrevOk(s, i)) return null;
-  const domEnd = parseWwwDomain(s, i + prefixLen, n);
-  if (domEnd < 0) return null;
-  let j = domEnd;
+  // find the raw end (up to space/tab/newline/<), trim it, then validate
+  // the domain within the trimmed span (trailing emphasis `_` etc. must
+  // not poison domain validation)
+  let j = i + prefixLen;
   while (j < n) {
     const c = s.charCodeAt(j);
     if (c === 32 || c === 9 || c === 10 || c === 60) break;
     j++;
   }
   const end = trimAutolinkEnd(s, i, j);
-  if (end <= i) return null;
+  if (end <= i + prefixLen) return null;
+  const domEnd = parseWwwDomain(s, i + prefixLen, end);
+  if (domEnd < 0) return null;
   const text = s.slice(i, end);
   return { end: end, text: text, href: hrefPrefix + text };
 }
@@ -1378,10 +1404,11 @@ function tryLink(s, j, n, br, nodes, brackets, refs) {
   if (href === null) return -1;
   const clean = cleanUrl(href);
   if (clean === null) return -1;
-  // a link's text may not contain another link (an image's alt may)
+  // a link's text may not contain another bracket link (an autolink
+  // inside it is fine, and an image's alt may contain either)
   if (!br.img) {
     for (let k2 = br.nodeIdx + 1; k2 < nodes.length; k2++) {
-      if (nodes[k2].t === 6) return -1;
+      if (nodes[k2].t === 6 && !nodes[k2].auto) return -1;
     }
   }
   const children = nodes.splice(br.nodeIdx + 1);
@@ -1608,7 +1635,7 @@ function scanInline(s, refs) {
           const href = cleanUrl(inner);
           if (href !== null) {
             flush();
-            nodes.push({ t: 6, href: href, title: null, ch: [{ t: 0, s: inner }] });
+            nodes.push({ t: 6, href: href, title: null, ch: [{ t: 0, s: inner }], auto: true });
             i = gt + 1; handled = true;
           }
         }
@@ -1617,7 +1644,7 @@ function scanInline(s, refs) {
           const em = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/.test(inner);
           if (em) {
             flush();
-            nodes.push({ t: 6, href: 'mailto:' + inner, title: null, ch: [{ t: 0, s: inner }] });
+            nodes.push({ t: 6, href: 'mailto:' + inner, title: null, ch: [{ t: 0, s: inner }], auto: true });
             i = gt + 1; handled = true;
           }
         }
@@ -1678,7 +1705,7 @@ function scanInline(s, refs) {
       const au = tryExtUrl(s, i, n);
       if (au) {
         flush();
-        nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }] });
+        nodes.push({ t: 6, href: au.href, title: null, ch: [{ t: 0, s: au.text }], auto: true });
         i = au.end;
         continue;
       }
@@ -1689,7 +1716,7 @@ function scanInline(s, refs) {
       const pr = tryProtocol(s, i, n);
       if (pr) {
         flush();
-        nodes.push({ t: 6, href: pr.href, title: null, ch: [{ t: 0, s: pr.text }] });
+        nodes.push({ t: 6, href: pr.href, title: null, ch: [{ t: 0, s: pr.text }], auto: true });
         i = pr.end;
         continue;
       }
@@ -1701,7 +1728,7 @@ function scanInline(s, refs) {
       if (em) {
         text = text.slice(0, text.length - em.localLen);
         flush();
-        nodes.push({ t: 6, href: em.href, title: null, ch: [{ t: 0, s: em.text }] });
+        nodes.push({ t: 6, href: em.href, title: null, ch: [{ t: 0, s: em.text }], auto: true });
         i = em.end;
         continue;
       }
