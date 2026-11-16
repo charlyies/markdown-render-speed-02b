@@ -2062,12 +2062,13 @@ export function parse(markdown) {
   (function setTrail(b) {
     if (b.t === 'html') {
       const isLast = b.lastLine === lines.length - 1;
-      // a tab-only next line is NOT blank for this rule (doc-15): only
-      // an empty or spaces-only line suppresses the trailing newline
+      // a whitespace-only next line does NOT suppress the trailing
+      // newline (doc-24: `   ` before a list still gets `\n` after
+      // `</pre>`); only a truly empty next line does
       let nextBlank = false;
       if (!isLast) {
         const nl = lines[b.lastLine + 1];
-        nextBlank = nl.length === 0 || /^[ ]+$/.test(nl);
+        nextBlank = nl.length === 0;
       }
       b.trailNl = b.cond <= 5 ? (isLast ? endsWithNl : !nextBlank) : (isLast && endsWithNl);
     }
