@@ -1691,7 +1691,38 @@ function scanInline(s, refs) {
       while (i + run < n && s.charCodeAt(i + run) === 96) run++;
       let close = -1;
       let j = i + run;
+      // a code span inside link text cannot swallow the `]` that closes
+      // the link (doc-28) — UNLESS its closer sits inside the link's
+      // destination `(...)` (cm-342: `` `link` `` closes at the backtick
+      // in `/foo``), in which case the `]` is code content
+      const inBr = brackets.length > 0;
       while (j < n) {
+        if (inBr && s.charCodeAt(j) === 93) {
+          // look for a matching backtick run inside the destination
+          // `(...)` or immediately after its `)` (cm-342, cm-525);
+          // if none, the `]` closes the link and the span is unclosed
+          let k = j + 1, found = -1, paren = -1;
+          while (k < n && s.charCodeAt(k) !== 10) {
+            if (s.charCodeAt(k) === 41) { paren = k; break; }
+            if (s.charCodeAt(k) === 96) {
+              let r2 = 0;
+              while (k + r2 < n && s.charCodeAt(k + r2) === 96) r2++;
+              if (r2 === run) { found = k; break; }
+              k += r2;
+            } else k++;
+          }
+          if (found < 0 && paren >= 0) {
+            // a matching run immediately after the destination `)`
+            let k2 = paren + 1;
+            if (k2 < n && s.charCodeAt(k2) === 96) {
+              let r2 = 0;
+              while (k2 + r2 < n && s.charCodeAt(k2 + r2) === 96) r2++;
+              if (r2 === run) found = k2;
+            }
+          }
+          if (found < 0) break;
+          close = found; break;
+        }
         if (s.charCodeAt(j) === 96) {
           let r2 = 0;
           while (j + r2 < n && s.charCodeAt(j + r2) === 96) r2++;
