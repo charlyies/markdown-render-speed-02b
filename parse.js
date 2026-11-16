@@ -958,9 +958,12 @@ function blockParse(lines, refs) {
         if (d.tab === 0 && d.i < d.len && d.s.charCodeAt(d.i) === 62) {
           adv(d, 1);
           if (cch(d) === 32 || cch(d) === 9) adv(d, 1);
-          closeTo(contIdx);
+          // a blockquote is not a list item: if the deepest matched
+          // container is a list, close it and attach to its parent
+          const pi = stack[contIdx].t === 'list' ? contIdx - 1 : contIdx;
+          closeTo(pi);
           const q = { t: 'quote', ch: [] };
-          addChild(stack[contIdx], q, bb);
+          addChild(stack[pi], q, bb);
           stack.push(q);
           c.i = d.i; c.col = d.col; c.tab = d.tab;
           contIdx = stack.length - 1;
@@ -1482,6 +1485,18 @@ function processEmphasis(nodes) {
           // unless both lengths are multiples of 3
           if ((o.c || node.o) && (o.len + node.len) % 3 === 0 &&
               !(o.len % 3 === 0 && node.len % 3 === 0)) continue;
+          // a single closer must not split a double opener when a later
+          // double closer could still form a strong with it: `**a *b*c* d**`
+          // keeps the `**` strong and leaves the middle `*` literal.
+          // (A triple opener is fine: using 1 leaves 2 for the strong.)
+          if (node.len === 1 && o.len === 2) {
+            let laterStrong = false;
+            for (let nj = ni + 1; nj < nodes.length; nj++) {
+              const nd = nodes[nj];
+              if (nd.t === 3 && nd.ch === node.ch && nd.len >= 2 && nd.c) { laterStrong = true; break; }
+            }
+            if (laterStrong) continue;
+          }
           opener = o; openerIdx = si; openerNodeIdx = e.idx; break;
         }
         if (!opener) break;
