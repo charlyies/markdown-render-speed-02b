@@ -181,8 +181,9 @@ function cleanUrl(href) {
 // Normalise a link label: resolve backslash escapes, collapse runs of
 // whitespace to a single space, trim, and lower-case.
 function normalizeLabel(raw) {
-  let s = unescape(raw);
-  s = s.replace(/\s+/g, ' ');
+  // labels match on the raw text (backslashes included): `[foo\!]`
+  // does not match a `[foo!]` definition (cm-545)
+  let s = raw.replace(/\s+/g, ' ');
   // Unicode case folding: sharp s folds to "ss"
   return s.trim().toLowerCase().replace(/ß/g, 'ss');
 }
@@ -403,6 +404,9 @@ function parseTag(s, i, n) {
       if (isAlnumCode(d) || d === 95 || d === 46 || d === 58 || d === 45) j++;
       else break;
     }
+    // a boolean attribute has no `=`; back up over the whitespace we
+    // skipped looking for one, so the next attribute still sees it
+    const afterName = j;
     while (j < n && (s.charCodeAt(j) === 32 || s.charCodeAt(j) === 9)) j++;
     if (j < n && s.charCodeAt(j) === 61) { // =
       j++;
@@ -424,6 +428,8 @@ function parseTag(s, i, n) {
         }
         if (!ok) return -1;
       }
+    } else {
+      j = afterName;
     }
   }
 }
@@ -753,12 +759,15 @@ function blockParse(lines, refs) {
   // leaf is a table (no setext/table conversion, no indented code, and a
   // failure means "add a table row" rather than "add to a paragraph").
   function handleLine(c, contIdx, allMatched, bb, tableMode, ln) {
+    // `tm` is tableMode, but once a blockquote/list is opened the table
+    // has ended and the line's content is parsed normally
+    let tm = tableMode;
     while (true) {
       const tip = stack[stack.length - 1];
       const baseCol = c.col;
       const ind = indentCols(c);
       // ---- setext heading ----
-      if (!tableMode && tip.t === 'para' && allMatched && ind <= 3) {
+      if (!tm && tip.t === 'para' && allMatched && ind <= 3) {
         const sl = setextLevel(peekRest(c, 3));
         if (sl) {
           const stripped = parseDefs(tip.lines, refs);
@@ -937,6 +946,7 @@ function blockParse(lines, refs) {
           adv(d, contentIndent - markerEndCol);
           c.i = d.i; c.col = d.col; c.tab = d.tab;
           contIdx = stack.length - 1;
+          tm = false;
           continue; // check for block starts inside the item
           }
         }
@@ -954,11 +964,12 @@ function blockParse(lines, refs) {
           stack.push(q);
           c.i = d.i; c.col = d.col; c.tab = d.tab;
           contIdx = stack.length - 1;
+          tm = false;
           continue; // check for block starts inside the quote
         }
       }
       // ---- indented code ----
-      if (!tableMode && tip.t !== 'para' && ind >= 4) {
+      if (!tm && tip.t !== 'para' && ind >= 4) {
         const pi = stack[contIdx].t === 'list' ? contIdx - 1 : contIdx;
         closeTo(pi);
         const code = { t: 'code', fenced: false, lines: [], fenceIndent: 0 };
@@ -969,7 +980,7 @@ function blockParse(lines, refs) {
         return true;
       }
       // ---- paragraph ----
-      if (!tableMode) {
+      if (!tm) {
         if (tip.t === 'para') {
           let text = rest(c);
           if (!allMatched) {
@@ -1415,12 +1426,8 @@ function tryLink(s, j, n, br, nodes, brackets, refs) {
       const ref = refs.get(norm);
       if (ref) { href = ref.dest; title = ref.title; end = m + 1; }
     }
-    // a failed full/collapsed reference falls back to a shortcut
-    if (href === null) {
-      const norm = normalizeLabel(s.slice(br.start, j));
-      const ref = refs.get(norm);
-      if (ref) { href = ref.dest; title = ref.title; end = j + 1; }
-    }
+    // a failed full/collapsed reference does NOT fall back to a
+    // shortcut: `[foo]` stays literal so `[bar]` can link (cm-571)
   } else { // shortcut
     const norm = normalizeLabel(s.slice(br.start, j));
     const ref = refs.get(norm);
